@@ -52,67 +52,70 @@ def pairwise_distances(x, y=None):
 
 
 class MyTripletLossFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, features, triplets):
+        """
+        Compute the forward pass for triplet loss.
+        """
+        ctx.save_for_backward(features)
+        ctx.triplets = triplets
+        ctx.triplet_count = len(triplets)
 
-  def __init__(self, triplets):
-    super(MyTripletLossFunc, self).__init__()
-    self.triplets = triplets
-    self.triplet_count = len(triplets)
+        distances = pairwise_distances(features).cpu().numpy()
 
-  def forward(self, features):
-    self.save_for_backward(features)
+        loss = 0.0
+        triplet_count = 0.0
+        for i, j, k in triplets:
+            w = 1.0
+            triplet_count += w
+            loss += w * np.log(1 + np.exp(distances[i, j] - distances[i, k]))
 
-    self.distances = pairwise_distances(features).cpu().numpy()
+        loss /= triplet_count
+        ctx.distances = distances  # Store distances for backward computation
+        return torch.FloatTensor([loss]).to(features.device)
 
-    loss = 0.0
-    triplet_count = 0.0
-    correct_count = 0.0
-    for i, j, k in self.triplets:
-      w = 1.0
-      triplet_count += w
-      loss += w * np.log(1 +
-                         np.exp(self.distances[i, j] - self.distances[i, k]))
-      if self.distances[i, j] < self.distances[i, k]:
-        correct_count += 1
+    @staticmethod
+    def backward(ctx, grad_output):
+        """
+        Compute the backward pass for triplet loss.
+        """
+        features, = ctx.saved_tensors
+        triplets = ctx.triplets
+        triplet_count = ctx.triplet_count
+        distances = ctx.distances
 
-    loss /= triplet_count
-    return torch.FloatTensor((loss,))
+        features_np = features.cpu().numpy()
+        grad_features = features.clone() * 0.0
+        grad_features_np = grad_features.cpu().numpy()
 
-  def backward(self, grad_output):
-    features, = self.saved_tensors
-    features_np = features.cpu().numpy()
-    grad_features = features.clone() * 0.0
-    grad_features_np = grad_features.cpu().numpy()
+        for i, j, k in triplets:
+            w = 1.0
+            f = 1.0 - 1.0 / (1.0 + np.exp(distances[i, j] - distances[i, k]))
+            grad_features_np[i, :] += w * f * (features_np[i, :] - features_np[j, :]) / triplet_count
+            grad_features_np[j, :] += w * f * (features_np[j, :] - features_np[i, :]) / triplet_count
+            grad_features_np[i, :] += -w * f * (features_np[i, :] - features_np[k, :]) / triplet_count
+            grad_features_np[k, :] += -w * f * (features_np[k, :] - features_np[i, :]) / triplet_count
 
-    for i, j, k in self.triplets:
-      w = 1.0
-      f = 1.0 - 1.0 / (
-          1.0 + np.exp(self.distances[i, j] - self.distances[i, k]))
-      grad_features_np[i, :] += w * f * (
-          features_np[i, :] - features_np[j, :]) / self.triplet_count
-      grad_features_np[j, :] += w * f * (
-          features_np[j, :] - features_np[i, :]) / self.triplet_count
-      grad_features_np[i, :] += -w * f * (
-          features_np[i, :] - features_np[k, :]) / self.triplet_count
-      grad_features_np[k, :] += -w * f * (
-          features_np[k, :] - features_np[i, :]) / self.triplet_count
+        for i in range(features_np.shape[0]):
+            grad_features[i, :] = torch.from_numpy(grad_features_np[i, :]).to(features.device)
+        grad_features *= grad_output[0].item()
 
-    for i in range(features_np.shape[0]):
-      grad_features[i, :] = torch.from_numpy(grad_features_np[i, :])
-    grad_features *= float(grad_output.data[0])
-    return grad_features
-
+        return grad_features, None  # No gradient for `triplets`
 
 class TripletLoss(torch.nn.Module):
-  """Class for the triplet loss."""
-  def __init__(self, pre_layer=None):
-    super(TripletLoss, self).__init__()
-    self.pre_layer = pre_layer
+    """Class for the triplet loss."""
 
-  def forward(self, x, triplets):
-    if self.pre_layer is not None:
-      x = self.pre_layer(x)
-    loss = MyTripletLossFunc(triplets)(x)
-    return loss
+    def __init__(self, pre_layer=None):
+        super(TripletLoss, self).__init__()
+        self.pre_layer = pre_layer
+
+    def forward(self, x, triplets):
+        # Apply the pre-layer if it exists
+        if self.pre_layer is not None:
+            x = self.pre_layer(x)
+
+        loss = MyTripletLossFunc.apply(x, triplets)
+        return loss
 
 
 class NormalizationLayer(torch.nn.Module):
