@@ -63,7 +63,21 @@ class ImgTextCompositionBase(torch.nn.Module):
     assert (mod_img1.shape[0] == img2.shape[0] and
             mod_img1.shape[1] == img2.shape[1])
     if soft_triplet_loss:
-      return self.compute_soft_triplet_loss_(mod_img1, img2)
+      triplets = []
+      # print(range(mod_img1.shape[0]))
+      labels = list(range(mod_img1.shape[0])) + list(range(img2.shape[0]))
+      for i in range(len(labels)):
+        triplets_i = []
+        for j in range(len(labels)):
+          if labels[i] == labels[j] and i != j:
+            for k in range(len(labels)):
+              if labels[i] != labels[k]:
+                triplets_i.append([i, j, k])
+        np.random.shuffle(triplets_i)
+        triplets += triplets_i[:3]
+      assert (triplets and len(triplets) < 2000)
+      return torch_functions.TripletLoss()(torch.cat([mod_img1, img2]), triplets)
+      # return self.compute_soft_triplet_loss_(mod_img1, img2)
     else:
       return self.compute_batch_based_classification_loss_(mod_img1, img2)
 
